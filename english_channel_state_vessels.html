@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>English Channel – State Vessels Only</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'SF Mono', 'Consolas', 'Menlo', monospace; background: #0a0e14; color: #c4cad4; }
+  #map { width: 100%; height: 100vh; }
+
+  .control-panel {
+    position: absolute; top: 12px; right: 12px; z-index: 1000;
+    background: rgba(10, 14, 20, 0.92); border: 1px solid #1e2a3a;
+    border-radius: 8px; padding: 14px; width: 320px;
+    backdrop-filter: blur(10px);
+  }
+  .control-panel h2 { font-size: 13px; font-weight: 600; color: #e8a040; margin-bottom: 4px; letter-spacing: 0.5px; }
+  .control-panel .subtitle { font-size: 10px; color: #6b7785; margin-bottom: 10px; }
+  .control-panel label { font-size: 11px; color: #6b7785; display: block; margin-bottom: 3px; }
+  .control-panel input[type="text"] {
+    width: 100%; padding: 7px 9px; background: #121820; border: 1px solid #1e2a3a;
+    border-radius: 4px; color: #c4cad4; font-family: inherit; font-size: 12px;
+    margin-bottom: 8px; outline: none;
+  }
+  .control-panel input[type="text"]:focus { border-color: #3a7ca5; }
+  .control-panel input[type="text"]::placeholder { color: #3a4550; }
+
+  .btn {
+    padding: 7px 14px; border: none; border-radius: 4px; cursor: pointer;
+    font-family: inherit; font-size: 11px; font-weight: 600;
+    letter-spacing: 0.3px; transition: all 0.15s;
+  }
+  .btn-connect { background: #1a6b3c; color: #a5e6be; }
+  .btn-connect:hover { background: #1f7d46; }
+  .btn-disconnect { background: #6b1a1a; color: #e6a5a5; }
+  .btn-disconnect:hover { background: #7d1f1f; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .stats {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid #1e2a3a;
+    font-size: 11px; line-height: 1.8;
+  }
+  .stats .val { color: #e8a040; font-weight: 600; }
+  .status-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 5px; vertical-align: middle;
+  }
+  .status-dot.off { background: #4a3030; }
+  .status-dot.connecting { background: #a08030; animation: pulse 1s infinite; }
+  .status-dot.on { background: #30a050; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .legend {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid #1e2a3a;
+    font-size: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 8px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+  .log-panel {
+    position: absolute; bottom: 12px; left: 12px; z-index: 1000;
+    background: rgba(10, 14, 20, 0.92); border: 1px solid #1e2a3a;
+    border-radius: 8px; padding: 10px; width: 520px; max-height: 220px;
+    backdrop-filter: blur(10px); overflow: hidden;
+  }
+  .log-panel h3 { font-size: 11px; color: #6b7785; margin-bottom: 6px; }
+  #log {
+    font-size: 10px; line-height: 1.6; max-height: 185px;
+    overflow-y: auto; color: #5a6570;
+  }
+  #log .entry { border-bottom: 1px solid #141a22; padding: 2px 0; }
+  #log .ship-name { color: #e8a040; }
+  #log .sys { color: #a08030; }
+  #log .err { color: #e05555; }
+  #log .dim { color: #3a4550; }
+  #log .time { color: #3a4550; }
+
+  .leaflet-popup-content-wrapper {
+    background: rgba(10, 14, 20, 0.95) !important; border: 1px solid #1e2a3a !important;
+    border-radius: 6px !important; color: #c4cad4 !important;
+    font-family: 'SF Mono', 'Consolas', monospace !important;
+  }
+  .leaflet-popup-tip { background: rgba(10, 14, 20, 0.95) !important; }
+  .leaflet-popup-content { font-size: 11px !important; line-height: 1.7 !important; margin: 10px 14px !important; }
+  .popup-name { font-size: 13px; font-weight: 600; color: #e8a040; }
+  .popup-label { color: #6b7785; }
+  .popup-val { color: #c4cad4; }
+  .popup-type { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-top: 2px; }
+  .leaflet-container { background: #0d1117 !important; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="control-panel">
+  <h2>STATE VESSELS</h2>
+  <div class="subtitle">Military · SAR · Law Enforcement · Pilot · Port Tender</div>
+  <label>aisstream.io API Key</label>
+  <input type="text" id="apiKey" placeholder="paste your API key here" />
+  <div style="display:flex; gap:8px; align-items:center;">
+    <button class="btn btn-connect" id="connectBtn" onclick="toggleConnection()">Connect</button>
+    <span style="font-size:11px;">
+      <span class="status-dot off" id="statusDot"></span>
+      <span id="statusText">Disconnected</span>
+    </span>
+  </div>
+  <div class="stats">
+    <div>State vessels shown: <span class="val" id="vesselCount">0</span></div>
+    <div>AIS messages scanned: <span class="val" id="msgTotal">0</span></div>
+    <div>Messages/sec: <span class="val" id="msgRate">0</span></div>
+    <div>Vessels seen (all types): <span class="val" id="allVessels">0</span></div>
+    <div>Last update: <span class="val" id="lastUpdate">–</span></div>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-swatch" style="background:#e05555;"></div>Military/Navy</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#ff6030;"></div>SAR / Lifeboat</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#5090d0;"></div>Law Enforcement</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#50b86c;"></div>Pilot Vessel</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#a855c0;"></div>Port Tender</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#d0a030;"></div>Other Govt</div>
+  </div>
+</div>
+
+<div class="log-panel">
+  <h3>STATE VESSEL FEED</h3>
+  <div id="log"></div>
+</div>
+
+<script>
+// ── Bounding box: English Channel ──
+const BBOX_SW = [48.3, -6.0];
+const BBOX_NE = [51.5, 2.5];
+
+// ═══════════════════════════════════════
+// AIS Ship Type codes for state vessels
+//
+//  35 = Military operations
+//  50 = Pilot vessel
+//  51 = Search & rescue (KNRM, RNLI, etc.)
+//  52 = Tug (sometimes state-owned)
+//  53 = Port tender
+//  55 = Law enforcement (police, customs)
+//  58 = Medical transport
+//
+// Also filter by MMSI prefix:
+//  111xxxxx = SAR aircraft
+//  970xxxxx = AIS-SART (man overboard)
+//  00111xxx = Coast guard (some countries)
+// ═══════════════════════════════════════
+
+const STATE_TYPES = new Set([35, 50, 51, 53, 55, 58]);
+
+// Also accept if vessel name contains these keywords
+const STATE_KEYWORDS = [
+  'RNLI', 'KNRM', 'COASTGUARD', 'COAST GUARD',
+  'NAVY', 'MARINE', 'KONINKLIJKE', 'HMS ', 'HNLMS',
+  'POLICE', 'POLITIE', 'DOUANE', 'CUSTOMS',
+  'PILOT', 'LOODS',
+  'RESCUE', 'LIFEBOAT', 'REDDINGBOOT',
+  'PATROL', 'SAR ',
+  'ROYAL NAVY', 'MARINE NATIONALE',
+  'BORDER FORCE', 'KUSTWACHT'
+];
+
+function isStateVessel(type, name, mmsi) {
+  // Check AIS type code
+  if (STATE_TYPES.has(type)) return true;
+
+  // Check MMSI prefix (SAR aircraft, coast stations)
+  const ms = String(mmsi);
+  if (ms.startsWith('111')) return true;   // SAR aircraft
+  if (ms.startsWith('970')) return true;   // SART
+
+  // Check name keywords
+  if (name) {
+    const upper = name.toUpperCase();
+    for (const kw of STATE_KEYWORDS) {
+      if (upper.includes(kw)) return true;
+    }
+  }
+
+  return false;
+}
+
+function stateColor(type, name) {
+  if (type === 35) return '#e05555';                          // Military
+  if (type === 51) return '#ff6030';                          // SAR
+  if (type === 55) return '#5090d0';                          // Law enforcement
+  if (type === 50) return '#50b86c';                          // Pilot
+  if (type === 53) return '#a855c0';                          // Port tender
+  if (type === 58) return '#ff6030';                          // Medical
+  // Fallback: guess from name
+  const u = (name || '').toUpperCase();
+  if (/NAVY|HMS|HNLMS|MARINE|KONINKLIJKE/.test(u)) return '#e05555';
+  if (/RNLI|KNRM|RESCUE|LIFEBOAT|SAR|REDDINGBOOT/.test(u)) return '#ff6030';
+  if (/POLICE|POLITIE|DOUANE|CUSTOMS|LAW|BORDER/.test(u)) return '#5090d0';
+  if (/PILOT|LOODS/.test(u)) return '#50b86c';
+  if (/PATROL|KUSTWACHT|COASTGUARD|COAST GUARD/.test(u)) return '#d0a030';
+  return '#d0a030';
+}
+
+function stateTypeName(type, name) {
+  if (type === 35) return 'Military';
+  if (type === 51) return 'Search & Rescue';
+  if (type === 55) return 'Law Enforcement';
+  if (type === 50) return 'Pilot Vessel';
+  if (type === 53) return 'Port Tender';
+  if (type === 58) return 'Medical Transport';
+  const u = (name || '').toUpperCase();
+  if (/NAVY|HMS|HNLMS|MARINE|KONINKLIJKE/.test(u)) return 'Military';
+  if (/RNLI|KNRM|RESCUE|LIFEBOAT|SAR|REDDINGBOOT/.test(u)) return 'Search & Rescue';
+  if (/POLICE|POLITIE|DOUANE|CUSTOMS|BORDER/.test(u)) return 'Law Enforcement';
+  if (/PILOT|LOODS/.test(u)) return 'Pilot Vessel';
+  if (/PATROL|KUSTWACHT|COASTGUARD|COAST GUARD/.test(u)) return 'Coastguard';
+  return 'Government';
+}
+
+function navStatName(s) {
+  return ['Under way','Anchored','Not under cmd','Restricted','Constrained','Moored',
+    'Aground','Fishing','Sailing','Reserved','Reserved','Towing','Pushing',
+    'Reserved','SART','Undefined'][s] || '?';
+}
+
+// ── Map ──
+const map = L.map('map', { center: [50.0, -1.8], zoom: 7, zoomControl: false, preferCanvas: true });
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; CARTO &copy; OSM', subdomains: 'abcd', maxZoom: 18
+}).addTo(map);
+L.rectangle([BBOX_SW, BBOX_NE], { color: '#e8a040', weight: 1, fillOpacity: 0.02, dashArray: '6,4' }).addTo(map);
+
+// ── State ──
+const vessels = new Map();      // mmsi → { marker, data, ... } — only state vessels on map
+const typeCache = new Map();    // mmsi → { type, name } — ALL vessels we've seen static data for
+let ws = null, connected = false, manualDisconnect = false;
+let msgCount = 0, msgWindow = [], reconnectTimer = null;
+let allVesselsSeen = new Set();
+
+// ── Logging ──
+function logSys(text) { _log(`<span class="sys">● ${text}</span>`); console.log('[SYS]', text); }
+function logErr(text) { _log(`<span class="err">✖ ${text}</span>`); console.error('[ERR]', text); }
+function logShip(name, typeName, color) {
+  _log(`<span class="ship-name" style="color:${color}">⬤ ${name}</span> — ${typeName}`);
+}
+function logDim(text) { _log(`<span class="dim">${text}</span>`); }
+function _log(html) {
+  const el = document.getElementById('log');
+  const t = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = 'entry';
+  div.innerHTML = `<span class="time">${t}</span> ${html}`;
+  el.prepend(div);
+  while (el.children.length > 80) el.removeChild(el.lastChild);
+}
+
+// ── Ship icon — larger and more visible for state vessels ──
+function makeIcon(hdg, color, sog) {
+  const r = (hdg != null && hdg !== 511) ? hdg : 0;
+  const sz = 16, op = 0.95;
+  return L.divIcon({
+    html: `<svg width="${sz*2}" height="${sz*2}" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg">
+      <g transform="rotate(${r},14,14)">
+        <polygon points="14,1 23,25 14,19 5,25" fill="${color}" opacity="${op}" stroke="#fff" stroke-width="0.6"/>
+      </g></svg>`,
+    iconSize: [sz*2, sz*2], iconAnchor: [sz, sz], className: ''
+  });
+}
+
+// ── Handle AIS message ──
+function handleMessage(msg) {
+  const meta = msg.MetaData;
+  if (!meta) return;
+  const mmsi = meta.MMSI, lat = meta.latitude, lon = meta.longitude;
+  const name = (meta.ShipName || '').trim();
+  if (!lat || !lon || (lat === 0 && lon === 0)) return;
+
+  let hdg = 511, cog = 0, sog = 0, nav = 15, type = 0, dest = '', eta = '', draft = 0;
+  const mt = msg.MessageType, P = msg.Message;
+
+  if (mt === 'PositionReport' && P?.PositionReport) {
+    const r = P.PositionReport;
+    hdg = r.TrueHeading ?? 511; cog = r.Cog ?? 0; sog = r.Sog ?? 0; nav = r.NavigationalStatus ?? 15;
+  } else if (mt === 'ShipStaticData' && P?.ShipStaticData) {
+    const s = P.ShipStaticData;
+    type = s.Type ?? 0; dest = s.Destination ?? '';
+    eta = s.Eta ? `${s.Eta.Month}-${s.Eta.Day} ${s.Eta.Hour}:${String(s.Eta.Minute||0).padStart(2,'0')}` : '';
+    draft = (s.MaximumStaticDraught ?? 0) / 10;
+    // Cache type info for this vessel
+    typeCache.set(mmsi, { type, name: name || typeCache.get(mmsi)?.name || '' });
+  } else if (mt === 'StandardClassBPositionReport' && P?.StandardClassBPositionReport) {
+    const r = P.StandardClassBPositionReport;
+    hdg = r.TrueHeading ?? 511; cog = r.Cog ?? 0; sog = r.Sog ?? 0;
+  } else if (mt === 'ExtendedClassBPositionReport' && P?.ExtendedClassBPositionReport) {
+    const r = P.ExtendedClassBPositionReport;
+    hdg = r.TrueHeading ?? 511; cog = r.Cog ?? 0; sog = r.Sog ?? 0; type = r.ShipType ?? 0;
+    if (type) typeCache.set(mmsi, { type, name: name || typeCache.get(mmsi)?.name || '' });
+  }
+
+  msgCount++;
+  msgWindow.push(Date.now());
+  allVesselsSeen.add(mmsi);
+
+  // Resolve best known type for this vessel
+  const cached = typeCache.get(mmsi);
+  const bestType = type || cached?.type || 0;
+  const bestName = name || cached?.name || '';
+
+  // ── FILTER: only show state vessels ──
+  if (!isStateVessel(bestType, bestName, mmsi)) {
+    // Update stats but don't show on map
+    updateStats();
+    return;
+  }
+
+  // ── This is a state vessel — show/update on map ──
+  const color = stateColor(bestType, bestName);
+  const typeName = stateTypeName(bestType, bestName);
+
+  const ex = vessels.get(mmsi);
+  if (ex) {
+    const d = ex.data;
+    if (hdg !== 511) d.hdg = hdg; if (cog) d.cog = cog; d.sog = sog;
+    if (nav !== 15) d.nav = nav; if (bestType) d.type = bestType;
+    if (dest) d.dest = dest; if (eta) d.eta = eta; if (draft) d.draft = draft;
+    if (bestName) d.name = bestName; d.lat = lat; d.lon = lon;
+    ex.lastSeen = Date.now();
+    ex.marker.setLatLng([lat, lon]);
+    ex.marker.setIcon(makeIcon(d.hdg, color, d.sog));
+    ex.trail.push([lat, lon]);
+    if (ex.trail.length > 60) ex.trail.shift();
+    if (ex.polyline) ex.polyline.setLatLngs(ex.trail);
+  } else {
+    // New state vessel — add to map
+    const data = { mmsi, name: bestName, lat, lon, hdg, cog, sog, nav, type: bestType, dest, eta, draft };
+    const marker = L.marker([lat, lon], { icon: makeIcon(hdg, color, sog) }).addTo(map);
+
+    marker.on('click', () => {
+      const d = vessels.get(mmsi)?.data; if (!d) return;
+      const c = stateColor(d.type, d.name);
+      const tn = stateTypeName(d.type, d.name);
+      marker.unbindPopup();
+      marker.bindPopup(`
+        <div class="popup-name">${d.name || 'UNKNOWN'}</div>
+        <div><span class="popup-type" style="background:${c}30; color:${c}; border:1px solid ${c}50">${tn}</span></div>
+        <div style="margin-top:6px"><span class="popup-label">MMSI:</span> <span class="popup-val">${d.mmsi}</span></div>
+        <div><span class="popup-label">Status:</span> <span class="popup-val">${navStatName(d.nav)}</span></div>
+        <div><span class="popup-label">SOG:</span> <span class="popup-val">${d.sog.toFixed(1)} kn</span></div>
+        <div><span class="popup-label">COG:</span> <span class="popup-val">${d.cog.toFixed(1)}°</span></div>
+        <div><span class="popup-label">Heading:</span> <span class="popup-val">${d.hdg === 511 ? '–' : d.hdg + '°'}</span></div>
+        ${d.dest ? `<div><span class="popup-label">Dest:</span> <span class="popup-val">${d.dest}</span></div>` : ''}
+        ${d.eta ? `<div><span class="popup-label">ETA:</span> <span class="popup-val">${d.eta}</span></div>` : ''}
+        ${d.draft ? `<div><span class="popup-label">Draught:</span> <span class="popup-val">${d.draft.toFixed(1)} m</span></div>` : ''}
+        <div><span class="popup-label">Pos:</span> <span class="popup-val">${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}</span></div>
+      `, { maxWidth: 280 }).openPopup();
+    });
+
+    const trail = [[lat, lon]];
+    const polyline = L.polyline(trail, { color: color, weight: 2, opacity: 0.5 }).addTo(map);
+    vessels.set(mmsi, { marker, data, lastSeen: Date.now(), trail, polyline });
+
+    // Log new state vessel appearance
+    logShip(bestName || mmsi, typeName, color);
+  }
+
+  updateStats();
+}
+
+function updateStats() {
+  document.getElementById('vesselCount').textContent = vessels.size;
+  document.getElementById('msgTotal').textContent = msgCount.toLocaleString();
+  document.getElementById('allVessels').textContent = allVesselsSeen.size;
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+}
+
+// ── Rates & cleanup ──
+setInterval(() => {
+  const now = Date.now();
+  msgWindow = msgWindow.filter(t => now - t < 5000);
+  document.getElementById('msgRate').textContent = (msgWindow.length / 5).toFixed(1);
+}, 1000);
+setInterval(() => {
+  const now = Date.now();
+  for (const [mmsi, v] of vessels) {
+    if (now - v.lastSeen > 600000) {  // 10 min for state vessels (they may be stationary)
+      map.removeLayer(v.marker);
+      if (v.polyline) map.removeLayer(v.polyline);
+      vessels.delete(mmsi);
+    }
+  }
+  document.getElementById('vesselCount').textContent = vessels.size;
+}, 30000);
+
+// ═══════════════════════════════════════
+//  WEBSOCKET CONNECTION (via local proxy)
+// ═══════════════════════════════════════
+function toggleConnection() { connected ? disconnect() : connect(); }
+
+function connect() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) { alert('Enter your aisstream.io API key'); return; }
+  setStatus('connecting');
+
+  const wsUrl = 'ws://localhost:9000';
+  logSys('Connecting to proxy at ' + wsUrl + ' ...');
+
+  try { ws = new WebSocket(wsUrl); }
+  catch (e) { setStatus('off'); logErr('WebSocket creation failed: ' + e.message); return; }
+
+  ws.onopen = () => {
+    logSys('Connected to proxy. Waiting for AIS data...');
+    logSys('Scanning all traffic, filtering for state vessels...');
+    connected = true;
+    setStatus('on');
+  };
+
+  let rawN = 0;
+  ws.onmessage = (event) => {
+    try {
+      const raw = event.data;
+      const msg = JSON.parse(raw);
+
+      if (rawN < 2) {
+        console.log('Msg #' + rawN + ':', JSON.stringify(msg).substring(0, 300));
+        rawN++;
+      }
+
+      if (msg.error || msg.Error || msg.ERROR || msg.message) {
+        logErr('Server: ' + JSON.stringify(msg));
+        return;
+      }
+
+      if (msg.MessageType && msg.MetaData) {
+        handleMessage(msg);
+      }
+    } catch (e) {
+      logErr('Parse error: ' + e.message);
+    }
+  };
+
+  ws.onerror = (ev) => {
+    logErr('WebSocket error — is ais_proxy.py running?');
+    console.error('WS error:', ev);
+  };
+
+  ws.onclose = (ev) => {
+    connected = false;
+    setStatus('off');
+    logSys(`Closed — code=${ev.code} reason="${ev.reason||'none'}" clean=${ev.wasClean}`);
+    if (!manualDisconnect) {
+      logSys('Reconnecting in 5s...');
+      reconnectTimer = setTimeout(connect, 5000);
+    }
+  };
+
+  manualDisconnect = false;
+}
+
+function disconnect() {
+  manualDisconnect = true;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (ws) { ws.close(); ws = null; }
+  connected = false;
+  setStatus('off');
+  logSys('Disconnected manually');
+}
+
+function setStatus(s) {
+  const d = document.getElementById('statusDot');
+  const t = document.getElementById('statusText');
+  const b = document.getElementById('connectBtn');
+  d.className = 'status-dot ' + (s === 'on' ? 'on' : s === 'connecting' ? 'connecting' : 'off');
+  t.textContent = s === 'on' ? 'Connected' : s === 'connecting' ? 'Connecting...' : 'Disconnected';
+  b.textContent = s === 'on' ? 'Disconnect' : 'Connect';
+  b.className = s === 'on' ? 'btn btn-disconnect' : 'btn btn-connect';
+  b.disabled = (s === 'connecting');
+  if (s === 'connecting') setTimeout(() => b.disabled = false, 3000);
+}
+
+// Pre-fill key
+document.getElementById('apiKey').value = localStorage.getItem('aisstream_key') || '69d038ee63578ddc6d01327665ac6c73f1852596';
+document.getElementById('apiKey').addEventListener('change', e => {
+  localStorage.setItem('aisstream_key', e.target.value.trim());
+});
+</script>
+</body>
+</html>
