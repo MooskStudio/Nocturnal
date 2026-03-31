@@ -310,10 +310,8 @@ function connect() {
   const apiKey = document.getElementById('apiKey').value.trim();
   if (!apiKey) { alert('Enter your aisstream.io API key'); return; }
   setStatus('connecting');
-  // Connect via local Python proxy (ais_proxy.py) since aisstream.io
-  // sends non-standard WebSocket handshakes that browsers reject
   const wsUrl = 'ws://localhost:9000';
-  logSys('Connecting to proxy at ' + wsUrl + ' ...');
+  logSys('Connecting to ' + wsUrl + ' ...');
 
   try { ws = new WebSocket(wsUrl); }
   catch (e) { setStatus('off'); logErr('WebSocket creation failed: ' + e.message); return; }
@@ -338,9 +336,11 @@ function connect() {
   };
 
   let rawN = 0;
-  ws.onmessage = (event) => {
+  ws.onmessage = async (event) => {
     try {
-      const raw = event.data;
+      let raw = event.data;
+      if (raw instanceof Blob) raw = await raw.text();
+      else if (raw instanceof ArrayBuffer) raw = new TextDecoder().decode(raw);
       const msg = JSON.parse(raw);
 
       // Debug: log first 5 messages to console AND to the log panel
@@ -368,7 +368,7 @@ function connect() {
   };
 
   ws.onerror = (ev) => {
-    logErr('WebSocket error — open F12 console for details');
+    logErr('WebSocket error — check API key and open F12 console for details');
     console.error('WS error event:', ev);
   };
 

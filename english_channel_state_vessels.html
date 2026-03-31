@@ -405,22 +405,29 @@ function connect() {
   setStatus('connecting');
 
   const wsUrl = 'ws://localhost:9000';
-  logSys('Connecting to proxy at ' + wsUrl + ' ...');
+  logSys('Connecting to ' + wsUrl + ' ...');
 
   try { ws = new WebSocket(wsUrl); }
   catch (e) { setStatus('off'); logErr('WebSocket creation failed: ' + e.message); return; }
 
   ws.onopen = () => {
-    logSys('Connected to proxy. Waiting for AIS data...');
+    logSys('Connected. Sending subscription...');
+    const sub = {
+      APIKey: apiKey,
+      BoundingBoxes: [ [ [BBOX_SW[0], BBOX_SW[1]], [BBOX_NE[0], BBOX_NE[1]] ] ]
+    };
+    ws.send(JSON.stringify(sub));
     logSys('Scanning all traffic, filtering for state vessels...');
     connected = true;
     setStatus('on');
   };
 
   let rawN = 0;
-  ws.onmessage = (event) => {
+  ws.onmessage = async (event) => {
     try {
-      const raw = event.data;
+      let raw = event.data;
+      if (raw instanceof Blob) raw = await raw.text();
+      else if (raw instanceof ArrayBuffer) raw = new TextDecoder().decode(raw);
       const msg = JSON.parse(raw);
 
       if (rawN < 2) {
@@ -442,7 +449,7 @@ function connect() {
   };
 
   ws.onerror = (ev) => {
-    logErr('WebSocket error — is ais_proxy.py running?');
+    logErr('WebSocket error — check API key and open F12 console for details');
     console.error('WS error:', ev);
   };
 
