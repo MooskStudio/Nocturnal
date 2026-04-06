@@ -29,6 +29,7 @@ API_URL       = "https://data.aishub.net/ws.php"
 POLL_INTERVAL = 60          # seconds — DO NOT reduce below 60
 PORT          = 8082
 DATA_DIR      = "ais_data"  # directory for recorded files
+LAST_POLL_FILE = os.path.join(DATA_DIR, ".last_poll")  # persists rate-limit timestamp
 
 # English Channel bounding box
 LAT_MIN, LAT_MAX =  48.3, 51.5
@@ -73,6 +74,25 @@ def _fetch_raw():
 
 def _ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _save_last_poll(ts: float):
+    """Persist the wall-clock time of the last API call so restarts respect the rate limit."""
+    _ensure_data_dir()
+    try:
+        with open(LAST_POLL_FILE, "w") as f:
+            json.dump({"ts": ts}, f)
+    except OSError:
+        pass
+
+
+def _load_last_poll() -> float:
+    """Return the wall-clock time of the previous API call, or 0 if unknown."""
+    try:
+        with open(LAST_POLL_FILE) as f:
+            return float(json.load(f).get("ts", 0))
+    except Exception:
+        return 0
 
 
 def _open_session_files():
@@ -130,11 +150,23 @@ def _poll_loop():
 
     _ts = lambda: datetime.now().strftime("%H:%M:%S")
 
+    # Honour the rate limit across restarts: if we polled recently, wait out the remainder.
+    elapsed_since_last = time.time() - _load_last_poll()
+    initial_wait = max(0.0, POLL_INTERVAL - elapsed_since_last)
+    if initial_wait > 1:
+        print(f"  Rate-limit cooldown: waiting {initial_wait:.0f}s before first poll…")
+        with _lock:
+            _state["next_poll_at"] = datetime.fromtimestamp(
+                time.time() + initial_wait, tz=timezone.utc
+            ).isoformat()
+        time.sleep(initial_wait)
+
     while True:
         poll_start = time.monotonic()
         try:
             print(f"[{_ts()}] Polling AISHub API…")
             data = _fetch_raw()
+            _save_last_poll(time.time())
 
             meta    = data[0] if isinstance(data[0], dict) else {}
             vessels = data[1] if len(data) > 1 else []
@@ -174,6 +206,11 @@ def _poll_loop():
 
 
 # ── HTTP server ────────────────────────────────────────────────────────────────
+
+class _Server(HTTPServer):
+    """HTTPServer with SO_REUSEADDR so the port is freed immediately on restart."""
+    allow_reuse_address = True
+
 
 class _Handler(BaseHTTPRequestHandler):
 
@@ -759,7 +796,7 @@ def main():
     t.start()
 
     # Start HTTP server
-    server = HTTPServer(("localhost", PORT), _Handler)
+    server = _Server(("localhost", PORT), _Handler)
     print(f"Open http://localhost:{PORT} in your browser.")
     print("Press Ctrl+C to stop.\n")
     try:

@@ -5,10 +5,14 @@ Reads a recorded .jsonl (or .csv) session file produced by aishub_tracker.py
 and generates a fully standalone animated HTML file — just open it in any browser.
 
 Usage:
-  python3 aishub_playback.py                       # auto-picks latest file in ais_data/
+  python3 aishub_playback.py                            # auto-picks latest file in ais_data/
   python3 aishub_playback.py path/to/file.jsonl
   python3 aishub_playback.py path/to/file.csv
-  python3 aishub_playback.py --list                # list available recordings
+  python3 aishub_playback.py --list                     # list available recordings
+  python3 aishub_playback.py --max-snapshots 300        # override snapshot cap (default 200)
+
+Large recordings are automatically sub-sampled to --max-snapshots evenly-spaced frames
+so that the generated HTML stays browser-friendly (typically well under 10 MB).
 """
 
 import json
@@ -19,7 +23,8 @@ import glob
 import webbrowser
 from datetime import datetime, timezone
 
-DATA_DIR = "ais_data"
+DATA_DIR      = "ais_data"
+MAX_SNAPSHOTS = 200   # default cap; keeps HTML well under ~10 MB for typical Channel data
 
 
 # ── Data loading ───────────────────────────────────────────────────────────────
@@ -674,14 +679,38 @@ def list_files():
     print()
 
 
+def _subsample(snapshots: list, max_snaps: int) -> list:
+    """Return at most max_snaps evenly-spaced snapshots, always keeping first and last."""
+    n = len(snapshots)
+    if n <= max_snaps:
+        return snapshots
+    indices = {0, n - 1}
+    step = n / max_snaps
+    for i in range(1, max_snaps - 1):
+        indices.add(round(i * step))
+    return [snapshots[i] for i in sorted(indices)]
+
+
 def main():
     args = sys.argv[1:]
+
+    # Parse --max-snapshots N
+    max_snaps = MAX_SNAPSHOTS
+    for i, a in enumerate(args):
+        if a in ("--max-snapshots", "-n") and i + 1 < len(args):
+            try:
+                max_snaps = int(args[i + 1])
+                args = args[:i] + args[i + 2:]   # remove the two tokens
+            except ValueError:
+                print(f"Error: --max-snapshots requires an integer, got '{args[i+1]}'")
+                sys.exit(1)
+            break
 
     if "--list" in args or "-l" in args:
         list_files()
         return
 
-    if args:
+    if args and not args[0].startswith("-"):
         source = args[0]
     else:
         source = find_latest_file()
@@ -710,7 +739,13 @@ def main():
         print("Error: file is empty or contains no valid records.")
         sys.exit(1)
 
-    print(f"  {len(raw)} snapshots loaded")
+    n_raw = len(raw)
+    print(f"  {n_raw} snapshots loaded")
+
+    if n_raw > max_snaps:
+        raw = _subsample(raw, max_snaps)
+        print(f"  Sub-sampled to {len(raw)} snapshots "
+              f"(use --max-snapshots {n_raw} to keep all)")
 
     payload = build_payload(raw, source)
     n_snaps = len(payload["snapshots"])
@@ -741,7 +776,8 @@ def main():
         f.write(html)
 
     size_kb = os.path.getsize(out_path) / 1024
-    print(f"\nGenerated: {out_path}  ({size_kb:.0f} KB)")
+    size_warn = "  ⚠ large file — may load slowly in browser" if size_kb > 20_000 else ""
+    print(f"\nGenerated: {out_path}  ({size_kb:.0f} KB){size_warn}")
     print("Opening in browser…")
     webbrowser.open(f"file://{os.path.abspath(out_path)}")
 
