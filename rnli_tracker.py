@@ -33,8 +33,9 @@ DATA_DIR       = "rnli_data"
 # Shared with aishub_tracker.py — one file governs the rate limit for the whole API key
 LAST_POLL_FILE = os.path.expanduser("~/.aishub_last_poll")
 
-# UK + Irish coastline bounding box  (catches all RNLI stations)
-LAT_MIN, LAT_MAX =  49.0, 61.5
+# UK + Irish coastline + English Channel bounding box
+# LAT_MIN extended to 47.5 to cover the full English Channel where Border Force operates
+LAT_MIN, LAT_MAX =  47.5, 61.5
 LON_MIN, LON_MAX = -11.0,  3.0
 
 # ── Border Force vessels (subset of the MMSI list — shown in a different colour) ──
@@ -220,8 +221,17 @@ def _poll_loop():
                     _append_record(timestamp, rnli, meta, jsonl_path, csv_path)
                     _state["total_records"] += len(rnli)
 
-            print(f"  ↳ {len(rnli)} RNLI vessels visible  "
-                  f"(of {len(all_vessels)} in area)  |  poll #{_state['poll_count']}")
+            bf_visible = [v for v in rnli if str(v.get("MMSI","")) in BORDER_FORCE_MMSIS]
+            rnli_only  = len(rnli) - len(bf_visible)
+            print(f"  ↳ {len(rnli)} vessels  "
+                  f"({rnli_only} RNLI  +  {len(bf_visible)} Border Force)  "
+                  f"of {len(all_vessels)} in area  |  poll #{_state['poll_count']}")
+            for bfv in bf_visible:
+                name = str(bfv.get("NAME","")).strip() or "?"
+                lat  = bfv.get("LATITUDE",  0)
+                lon  = bfv.get("LONGITUDE", 0)
+                print(f"     \U0001f535 {name}  MMSI {bfv.get('MMSI')}  "
+                      f"{float(lat):.3f}N {float(lon):.3f}E")
 
         except Exception as exc:
             err = f"{type(exc).__name__}: {exc}"
