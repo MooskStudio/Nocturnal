@@ -18,6 +18,7 @@ import io
 import os
 import sys
 import gzip
+import fcntl
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
@@ -28,8 +29,9 @@ API_KEY       = "AH_2670_9F0D1564"
 API_URL       = "https://data.aishub.net/ws.php"
 POLL_INTERVAL = 60          # seconds — DO NOT reduce below 60
 PORT          = 8082
-DATA_DIR      = "ais_data"  # directory for recorded files
-LAST_POLL_FILE = os.path.join(DATA_DIR, ".last_poll")  # persists rate-limit timestamp
+DATA_DIR       = "ais_data"  # directory for recorded files
+# Shared across ALL scripts using this API key — lives in ~ so both trackers see it
+LAST_POLL_FILE = os.path.expanduser("~/.aishub_last_poll")
 
 # English Channel bounding box
 LAT_MIN, LAT_MAX =  48.3, 51.5
@@ -76,23 +78,40 @@ def _ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
 
 
-def _save_last_poll(ts: float):
-    """Persist the wall-clock time of the last API call so restarts respect the rate limit."""
-    _ensure_data_dir()
-    try:
-        with open(LAST_POLL_FILE, "w") as f:
-            json.dump({"ts": ts}, f)
-    except OSError:
-        pass
+def _wait_for_poll_slot() -> None:
+    """
+    Block until it is safe to call the AISHub API, then atomically record the
+    call time.  Uses an exclusive file lock (fcntl.flock) so that multiple
+    scripts sharing the same API key (e.g. aishub_tracker + rnli_tracker
+    running concurrently) cannot both fire within the same 60-second window.
+    """
+    while True:
+        remaining = float(POLL_INTERVAL)
+        try:
+            with open(LAST_POLL_FILE, "a+") as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX)      # blocks if another script holds it
+                fh.seek(0)
+                content = fh.read().strip()
+                last_ts = float(json.loads(content).get("ts", 0)) if content else 0
+                elapsed = time.time() - last_ts
 
+                if elapsed >= POLL_INTERVAL:
+                    # Slot is free — claim it by writing our timestamp before releasing
+                    fh.seek(0); fh.truncate()
+                    json.dump({"ts": time.time()}, fh)
+                    fh.flush()
+                    return          # context manager releases the lock
+                remaining = max(1.0, POLL_INTERVAL - elapsed)
+                # context manager releases lock; we did NOT claim the slot
+        except Exception:
+            pass
 
-def _load_last_poll() -> float:
-    """Return the wall-clock time of the previous API call, or 0 if unknown."""
-    try:
-        with open(LAST_POLL_FILE) as f:
-            return float(json.load(f).get("ts", 0))
-    except Exception:
-        return 0
+        # Update UI countdown while we wait
+        with _lock:
+            _state["next_poll_at"] = datetime.fromtimestamp(
+                time.time() + remaining, tz=timezone.utc
+            ).isoformat()
+        time.sleep(min(remaining, 5))   # re-check every 5 s at most
 
 
 def _open_session_files():
@@ -150,23 +169,12 @@ def _poll_loop():
 
     _ts = lambda: datetime.now().strftime("%H:%M:%S")
 
-    # Honour the rate limit across restarts: if we polled recently, wait out the remainder.
-    elapsed_since_last = time.time() - _load_last_poll()
-    initial_wait = max(0.0, POLL_INTERVAL - elapsed_since_last)
-    if initial_wait > 1:
-        print(f"  Rate-limit cooldown: waiting {initial_wait:.0f}s before first poll…")
-        with _lock:
-            _state["next_poll_at"] = datetime.fromtimestamp(
-                time.time() + initial_wait, tz=timezone.utc
-            ).isoformat()
-        time.sleep(initial_wait)
-
     while True:
+        _wait_for_poll_slot()   # blocks until safe; handles cooldown + concurrent scripts
         poll_start = time.monotonic()
         try:
             print(f"[{_ts()}] Polling AISHub API…")
             data = _fetch_raw()
-            _save_last_poll(time.time())
 
             meta    = data[0] if isinstance(data[0], dict) else {}
             vessels = data[1] if len(data) > 1 else []

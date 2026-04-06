@@ -18,6 +18,7 @@ import csv
 import gzip
 import os
 import sys
+import fcntl
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
@@ -29,7 +30,8 @@ API_URL        = "https://data.aishub.net/ws.php"
 POLL_INTERVAL  = 60          # seconds — DO NOT reduce below 60
 PORT           = 8083
 DATA_DIR       = "rnli_data"
-LAST_POLL_FILE = os.path.join(DATA_DIR, ".last_poll")
+# Shared with aishub_tracker.py — one file governs the rate limit for the whole API key
+LAST_POLL_FILE = os.path.expanduser("~/.aishub_last_poll")
 
 # UK + Irish coastline bounding box  (catches all RNLI stations)
 LAT_MIN, LAT_MAX =  49.0, 61.5
@@ -107,21 +109,37 @@ def _ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
 
 
-def _save_last_poll(ts: float):
-    _ensure_data_dir()
-    try:
-        with open(LAST_POLL_FILE, "w") as f:
-            json.dump({"ts": ts}, f)
-    except OSError:
-        pass
+def _wait_for_poll_slot() -> None:
+    """
+    Block until it is safe to call the AISHub API, then atomically record the
+    call time.  Uses an exclusive file lock so that aishub_tracker.py and
+    rnli_tracker.py running concurrently cannot both fire within the same
+    60-second window — they share ~/.aishub_last_poll.
+    """
+    while True:
+        remaining = float(POLL_INTERVAL)
+        try:
+            with open(LAST_POLL_FILE, "a+") as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX)      # blocks if the other tracker holds it
+                fh.seek(0)
+                content = fh.read().strip()
+                last_ts = float(json.loads(content).get("ts", 0)) if content else 0
+                elapsed = time.time() - last_ts
 
+                if elapsed >= POLL_INTERVAL:
+                    fh.seek(0); fh.truncate()
+                    json.dump({"ts": time.time()}, fh)
+                    fh.flush()
+                    return          # context manager releases the lock
+                remaining = max(1.0, POLL_INTERVAL - elapsed)
+        except Exception:
+            pass
 
-def _load_last_poll() -> float:
-    try:
-        with open(LAST_POLL_FILE) as f:
-            return float(json.load(f).get("ts", 0))
-    except Exception:
-        return 0
+        with _lock:
+            _state["next_poll_at"] = datetime.fromtimestamp(
+                time.time() + remaining, tz=timezone.utc
+            ).isoformat()
+        time.sleep(min(remaining, 5))
 
 
 def _open_session_files():
@@ -169,23 +187,12 @@ def _poll_loop():
 
     _ts = lambda: datetime.now().strftime("%H:%M:%S")
 
-    # Respect rate limit across restarts
-    elapsed = time.time() - _load_last_poll()
-    wait    = max(0.0, POLL_INTERVAL - elapsed)
-    if wait > 1:
-        print(f"  Rate-limit cooldown: waiting {wait:.0f}s…")
-        with _lock:
-            _state["next_poll_at"] = datetime.fromtimestamp(
-                time.time() + wait, tz=timezone.utc
-            ).isoformat()
-        time.sleep(wait)
-
     while True:
+        _wait_for_poll_slot()   # blocks until safe; handles cooldown + concurrent scripts
         poll_start = time.monotonic()
         try:
             print(f"[{_ts()}] Polling AISHub API (UK coast)…")
             data = _fetch_raw()
-            _save_last_poll(time.time())
 
             meta        = data[0] if isinstance(data[0], dict) else {}
             all_vessels = data[1] if len(data) > 1 else []
