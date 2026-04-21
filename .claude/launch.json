@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "AIS Map Server",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["server.py"],
+      "port": 8080
+    },
+    {
+      "name": "AIS Proxy Only",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["ais_proxy.py"],
+      "port": 9000
+    }
+  ]
+}

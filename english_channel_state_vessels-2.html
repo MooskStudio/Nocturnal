@@ -648,11 +648,19 @@ function toggleConnection(){connected?disconnect():connect();}
 function connect(){
   const apiKey=document.getElementById('apiKey').value.trim();
   if(!apiKey){alert('Enter API key');return;}
-  setStatus('connecting');logSys('Connecting to proxy...');
+  setStatus('connecting');logSys('Connecting...');
   try{ws=new WebSocket('ws://localhost:9000');}catch(e){setStatus('off');logErr(e.message);return;}
-  ws.onopen=()=>{logSys('Connected. Scanning for state vessels...');connected=true;setStatus('on');if(!lastSnapshotTime)lastSnapshotTime=Date.now();};
-  ws.onmessage=ev=>{try{const msg=JSON.parse(ev.data);if(msg.error||msg.Error){logErr(JSON.stringify(msg));return;}if(msg.MessageType&&msg.MetaData)handleMessage(msg);}catch(e){logErr('Parse: '+e.message);}};
-  ws.onerror=()=>logErr('WebSocket error — is ais_proxy.py running?');
+  ws.onopen=()=>{
+    const sub={APIKey:apiKey,BoundingBoxes:[[[BBOX_SW[0],BBOX_SW[1]],[BBOX_NE[0],BBOX_NE[1]]]]};
+    ws.send(JSON.stringify(sub));
+    logSys('Connected. Scanning for state vessels...');connected=true;setStatus('on');if(!lastSnapshotTime)lastSnapshotTime=Date.now();
+  };
+  ws.onmessage=async ev=>{try{
+    let raw=ev.data;
+    if(raw instanceof Blob)raw=await raw.text();
+    else if(raw instanceof ArrayBuffer)raw=new TextDecoder().decode(raw);
+    const msg=JSON.parse(raw);if(msg.error||msg.Error){logErr(JSON.stringify(msg));return;}if(msg.MessageType&&msg.MetaData)handleMessage(msg);}catch(e){logErr('Parse: '+e.message);}};
+  ws.onerror=()=>logErr('WebSocket error — check API key and open F12 console for details');
   ws.onclose=ev=>{connected=false;setStatus('off');logSys(`Closed (${ev.code})`);if(!manualDisconnect){logSys('Reconnecting in 5s...');reconnectTimer=setTimeout(connect,5000);}};
   manualDisconnect=false;
 }
