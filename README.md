@@ -1,14 +1,95 @@
 # English Channel Live AIS Tracker
 
-Real-time ship tracking maps for the English Channel using AIS (Automatic Identification System) data from aisstream.io. Two views are included: all vessel traffic, and a filtered view showing only state/government vessels.
+Real-time ship tracking maps for the English Channel using AIS (Automatic Identification System) data. Two data sources are supported:
+
+- **AISHub** (`aishub_tracker.py`) — REST polling API, records data to file
+- **aisstream.io** (`ais_proxy.py`) — WebSocket stream, live updates only
 
 ## What's Included
 
 | File | Description |
 |------|-------------|
-| `ais_proxy.py` | Local WebSocket proxy — required for both maps |
+| `aishub_tracker.py` | AISHub REST tracker — self-contained server + map viewer with recording |
+| `ais_proxy.py` | aisstream.io WebSocket proxy — required for the HTML maps below |
 | `english_channel_ais.html` | All vessel traffic (tankers, cargo, passenger, fishing, etc.) |
 | `english_channel_state_vessels.html` | State vessels only (military, SAR/lifeboats, police, pilot, coastguard) |
+
+---
+
+## AISHub Tracker (`aishub_tracker.py`)
+
+Polls the AISHub REST API once per minute, renders vessels on an interactive Leaflet map, and continuously records position data to disk.
+
+### Features
+
+- **Rate-limited** — never exceeds the AISHub 1 request/minute limit
+- **Recording** — every poll snapshot is appended to a timestamped `.jsonl` file and a `.csv` file in the `ais_data/` directory
+- **Pause / resume** recording from the browser without stopping the tracker
+- **Download CSV or JSONL** of the current session directly from the map page
+- **Poll history** panel shows the vessel count for every poll this session
+- Click any vessel to see full AIS details (MMSI, name, type, speed, course, heading, draught, destination, ETA)
+
+### Quick start
+
+No extra packages required — uses Python standard library only.
+
+```bash
+python3 aishub_tracker.py
+```
+
+Then open **http://localhost:8082** in your browser.
+
+Terminal output:
+
+```
+────────────────────────────────────────────────────
+  AISHub English Channel Tracker
+────────────────────────────────────────────────────
+  API key   : AH_2670_9F0D1564
+  Bounding  : 48.3°N–51.5°N  -6.0°E–2.5°E
+  Interval  : 60 s  (API rate limit)
+  Data dir  : /path/to/ais_data/
+  Viewer    : http://localhost:8082
+────────────────────────────────────────────────────
+
+Open http://localhost:8082 in your browser.
+Press Ctrl+C to stop.
+
+[12:00:00] Polling AISHub API…
+  ↳ 312 vessels  |  poll #1
+[12:01:00] Polling AISHub API…
+  ↳ 318 vessels  |  poll #2
+```
+
+### Recorded files
+
+Each run creates two files in `ais_data/`:
+
+| File | Format | Contents |
+|------|--------|----------|
+| `ais_YYYYMMDD_HHMMSS.jsonl` | JSONL | One JSON object per poll — full vessel list + metadata |
+| `ais_YYYYMMDD_HHMMSS.csv`   | CSV   | One row per vessel per poll — all AIS fields |
+
+The CSV columns are: `poll_timestamp`, `MMSI`, `NAME`, `CALLSIGN`, `TYPE`, `LATITUDE`, `LONGITUDE`, `SOG`, `COG`, `HEADING`, `NAVSTAT`, `ROT`, `IMO`, `DRAUGHT`, `DEST`, `ETA`, `A`, `B`, `C`, `D`.
+
+### REST API
+
+The tracker also exposes a local API for the map and for scripted access:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Embedded map viewer |
+| `/api/vessels` | GET | Current vessel snapshot (JSON) |
+| `/api/status` | GET | Polling status, recording state, file paths |
+| `/api/history` | GET | Summary of every poll this session |
+| `/api/export/csv` | GET | Download current session CSV |
+| `/api/export/json` | GET | Download current session JSONL |
+| `/api/recording/start` | POST | Resume recording |
+| `/api/recording/stop` | POST | Pause recording |
+
+---
+
+## aisstream.io WebSocket Tracker
 
 ## Requirements
 
