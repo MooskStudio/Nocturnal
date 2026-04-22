@@ -18,7 +18,6 @@ import io
 import os
 import sys
 import gzip
-import fcntl
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
@@ -87,18 +86,35 @@ def _ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
 
 
+# Cross-platform file locking
+try:
+    import fcntl as _fcntl
+    def _lock_file(fh):   _fcntl.flock(fh, _fcntl.LOCK_EX)
+    def _unlock_file(fh): _fcntl.flock(fh, _fcntl.LOCK_UN)
+except ImportError:
+    # Windows — use msvcrt byte-range locking
+    import msvcrt as _msvcrt
+    def _lock_file(fh):
+        fh.seek(0)
+        try: _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+        except OSError: pass
+    def _unlock_file(fh):
+        fh.seek(0)
+        try: _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+        except OSError: pass
+
+
 def _wait_for_poll_slot() -> None:
     """
     Block until it is safe to call the AISHub API, then atomically record the
-    call time.  Uses an exclusive file lock (fcntl.flock) so that multiple
-    scripts sharing the same API key (e.g. aishub_tracker + rnli_tracker
-    running concurrently) cannot both fire within the same 60-second window.
+    call time. Cross-platform: uses fcntl on macOS/Linux, msvcrt on Windows.
+    Prevents multiple scripts sharing the same API key from polling concurrently.
     """
     while True:
         remaining = float(POLL_INTERVAL)
         try:
             with open(LAST_POLL_FILE, "a+") as fh:
-                fcntl.flock(fh, fcntl.LOCK_EX)      # blocks if another script holds it
+                _lock_file(fh)
                 fh.seek(0)
                 content = fh.read().strip()
                 last_ts = float(json.loads(content).get("ts", 0)) if content else 0
@@ -109,9 +125,10 @@ def _wait_for_poll_slot() -> None:
                     fh.seek(0); fh.truncate()
                     json.dump({"ts": time.time()}, fh)
                     fh.flush()
-                    return          # context manager releases the lock
+                    _unlock_file(fh)
+                    return
                 remaining = max(1.0, POLL_INTERVAL - elapsed)
-                # context manager releases lock; we did NOT claim the slot
+                _unlock_file(fh)
         except Exception:
             pass
 

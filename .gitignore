@@ -20,3 +20,7 @@ __pycache__/
 # Downloaded satellite data
 sentinel_data/
 ais_data/
+
+# Generated tiles and model weights
+tiles/
+*.pt
