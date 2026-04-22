@@ -24,6 +24,8 @@ import urllib.parse
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+from ais_store import AISStore
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 API_KEY       = "AH_2670_9F0D1564"
 API_URL       = "https://data.aishub.net/ws.php"
@@ -36,6 +38,13 @@ LAST_POLL_FILE = os.path.expanduser("~/.aishub_last_poll")
 # English Channel bounding box
 LAT_MIN, LAT_MAX =  48.3, 51.5
 LON_MIN, LON_MAX =  -6.0,  2.5
+
+# ── AIS memory (Phase 1) ───────────────────────────────────────────────────────
+DB_PATH = os.environ.get(
+    "NOCTURNAL_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ais_memory.db"),
+)
+STORE = AISStore(DB_PATH)
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 _state = {
@@ -200,7 +209,12 @@ def _poll_loop():
                                    jsonl_path, csv_path)
                     _state["total_records"] += len(vessels)
 
-            print(f"  ↳ {len(vessels)} vessels  |  poll #{_state['poll_count']}")
+            # ── Phase 1: persist to SQLite ─────────────────────────────────
+            written = STORE.record_aishub_snapshot(vessels, timestamp)
+            db_stats = STORE.stats()
+
+            print(f"  ↳ {len(vessels)} vessels  |  poll #{_state['poll_count']}"
+                  f"  |  db: {db_stats['positions']} pings, {db_stats['vessels']} vessels")
 
         except Exception as exc:
             err = f"{type(exc).__name__}: {exc}"
@@ -795,6 +809,7 @@ def main():
     print(f"  Bounding  : {LAT_MIN}°N–{LAT_MAX}°N  {LON_MIN}°E–{LON_MAX}°E")
     print(f"  Interval  : {POLL_INTERVAL} s  (API rate limit)")
     print(f"  Data dir  : {os.path.abspath(DATA_DIR)}/")
+    print(f"  Database  : {DB_PATH}")
     print(f"  Viewer    : http://localhost:{PORT}")
     print("─" * 52)
     print()
@@ -811,6 +826,8 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[stopped]")
+    finally:
+        STORE.close()
 
 
 if __name__ == "__main__":

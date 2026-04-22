@@ -1,0 +1,22 @@
+# Database
+ais_memory.db
+ais_memory_test.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Downloaded satellite data
+sentinel_data/
+ais_data/
